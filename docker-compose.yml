@@ -1,0 +1,27 @@
+version: '3'
+services:
+  master:
+    build:
+      context: ./master
+      dockerfile: Dockerfile
+    networks:
+      - my_network
+    cap_add:
+      - NET_ADMIN
+    ports:
+      - "8001:8001/udp"
+      - "9001:9001"
+
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+    networks:
+      - my_network
+    cap_add:
+      - NET_ADMIN
+
+
+networks:
+  my_network:
+    driver: bridge
