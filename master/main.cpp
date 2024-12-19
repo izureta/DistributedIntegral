@@ -31,6 +31,7 @@ double integrationResult = 0;
 std::vector<std::pair<double, double> > ranges;
 std::vector<int> availableWorkers;
 std::mutex mtx;
+std::mutex resultMtx;
 
 int CreateUDPSocket() {
     int udpSocket;
@@ -159,46 +160,53 @@ void CalculateIntegral() {
         std::this_thread::sleep_for(1ms);
         {
             std::lock_guard<std::mutex> lock(mtx);
-
-            //random_shuffle(availableWorkers.begin(), availableWorkers.end());
             std::vector<bool> isDeadWorker(availableWorkers.size());
-            for (size_t i = 0; i < availableWorkers.size(); ++i) {
+            std::vector<bool> calculatedRanges(ranges.size());
+            std::vector<std::thread> queries;
+            for (size_t i = 0; i < std::min(availableWorkers.size(), ranges.size()); ++i) {
+                auto range = ranges[i];
                 int socket = availableWorkers[i];
-                if (setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
-                    std::cerr << "Send timeout setting error: " << strerror(errno) << std::endl;
-                    isDeadWorker[i] = true;
-                    continue;
-                }
-                auto range = *ranges.rbegin();
+                queries.emplace_back([i, range, socket, timeout, &isDeadWorker, &calculatedRanges, &integrationResult]{
+                    if (setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
+                        std::cerr << "Send timeout setting error: " << strerror(errno) << std::endl;
+                        isDeadWorker[i] = true;
+                        return;
+                    }
 
-                if (send(socket, &range, sizeof(range), 0) != sizeof(range)) {
-                    std::cerr << "Range sending error or timeout: " << strerror(errno) << std::endl;
-                    isDeadWorker[i] = true;
-                    continue;
-                }
+                    if (send(socket, &range, sizeof(range), 0) != sizeof(range)) {
+                        std::cerr << "Range sending error or timeout: " << strerror(errno) << std::endl;
+                        isDeadWorker[i] = true;
+                        return;
+                    }
 
-                if (setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
-                    std::cerr << "Receive timeout setting error: " << strerror(errno) << std::endl;
-                    isDeadWorker[i] = true;
-                    continue;
-                }
+                    if (setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
+                        std::cerr << "Receive timeout setting error: " << strerror(errno) << std::endl;
+                        isDeadWorker[i] = true;
+                        return;
+                    }
 
-                double result;
-                if (recv(socket, &result, sizeof(result), 0) <= 0) {
-                    std::cerr << "Intergration result receiving error or timeout: " << strerror(errno) << std::endl;
-                    isDeadWorker[i] = true;
-                    continue;
-                }
+                    double result;
+                    if (recv(socket, &result, sizeof(result), 0) <= 0) {
+                        std::cerr << "Intergration result receiving error or timeout: " << strerror(errno) << std::endl;
+                        isDeadWorker[i] = true;
+                        return;
+                    }
 
-                integrationResult += result;
+                    {
+                        std::lock_guard<std::mutex> lock(resultMtx);
+                        integrationResult += result;
+                    }
 
-                ranges.pop_back();
-                if (ranges.empty()) {
-                    break;
-                }
+                    calculatedRanges[i] = true;
+                });
+            }
+
+            for (size_t i = 0; i < std::min(availableWorkers.size(), ranges.size()); ++i) {
+                queries[i].join();
             }
 
             std::vector<int> stillAliveWorkers;
+            std::vector<std::pair<double, double> > remainingRanges;
             for (size_t i = 0; i < availableWorkers.size(); ++i) {
                 if (!isDeadWorker[i]) {
                     stillAliveWorkers.push_back(availableWorkers[i]);
@@ -206,7 +214,13 @@ void CalculateIntegral() {
                     close(availableWorkers[i]);
                 }
             }
-            swap(stillAliveWorkers, availableWorkers);
+            for (size_t i = 0; i < ranges.size(); ++i) {
+                if (!calculatedRanges[i]) {
+                    remainingRanges.push_back(ranges[i]);
+                }
+            }
+            std::swap(stillAliveWorkers, availableWorkers);
+            std::swap(remainingRanges, ranges);
         }
     }
 }

@@ -15,4 +15,5 @@ tc qdisc add dev eth0 root netem duplicate 30%
 ```
 docker exec -it distributedintegral-worker-1 /bin/bash
 tc qdisc add dev eth0 root netem loss 100%
+tc qdisc change dev eth0 root netem loss 0%
 ```
