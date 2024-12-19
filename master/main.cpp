@@ -32,6 +32,7 @@ std::vector<std::pair<double, double> > ranges;
 std::vector<int> availableWorkers;
 std::mutex mtx;
 std::mutex resultMtx;
+std::mutex vectorsMtx;
 
 int CreateUDPSocket() {
     int udpSocket;
@@ -169,26 +170,38 @@ void CalculateIntegral() {
                 queries.emplace_back([i, range, socket, timeout, &isDeadWorker, &calculatedRanges, &integrationResult]{
                     if (setsockopt(socket, SOL_SOCKET, SO_SNDTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
                         std::cerr << "Send timeout setting error: " << strerror(errno) << std::endl;
-                        isDeadWorker[i] = true;
+                        {
+                            std::lock_guard<std::mutex> lock(vectorsMtx);
+                            isDeadWorker[i] = true;
+                        }
                         return;
                     }
 
                     if (send(socket, &range, sizeof(range), 0) != sizeof(range)) {
                         std::cerr << "Range sending error or timeout: " << strerror(errno) << std::endl;
-                        isDeadWorker[i] = true;
+                        {
+                            std::lock_guard<std::mutex> lock(vectorsMtx);
+                            isDeadWorker[i] = true;
+                        }
                         return;
                     }
 
                     if (setsockopt(socket, SOL_SOCKET, SO_RCVTIMEO, (char *)&timeout, sizeof(timeout)) < 0) {
                         std::cerr << "Receive timeout setting error: " << strerror(errno) << std::endl;
-                        isDeadWorker[i] = true;
+                        {
+                            std::lock_guard<std::mutex> lock(vectorsMtx);
+                            isDeadWorker[i] = true;
+                        }
                         return;
                     }
 
                     double result;
                     if (recv(socket, &result, sizeof(result), 0) <= 0) {
                         std::cerr << "Intergration result receiving error or timeout: " << strerror(errno) << std::endl;
-                        isDeadWorker[i] = true;
+                        {
+                            std::lock_guard<std::mutex> lock(vectorsMtx);
+                            isDeadWorker[i] = true;
+                        }
                         return;
                     }
 
@@ -197,7 +210,10 @@ void CalculateIntegral() {
                         integrationResult += result;
                     }
 
-                    calculatedRanges[i] = true;
+                    {
+                        std::lock_guard<std::mutex> lock(vectorsMtx);
+                        calculatedRanges[i] = true;
+                    }
                 });
             }
 
